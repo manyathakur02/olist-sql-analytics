@@ -102,16 +102,16 @@ ALTER TABLE order_reviews
 # - - - - - - - - - - - - - - - Queries - - - - - - - - - - - - - - - - 
 -- 1. Create and populate the Temporary Table once
 USE olist_ecommerce;
-
 DROP TEMPORARY TABLE IF EXISTS temp_monthly_revenue;
 
+# using temp table for query 1,2 
 CREATE TEMPORARY TABLE temp_monthly_revenue AS
-SELECT DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m') AS month,[cite: 1]
-       ROUND(SUM(oi.price), 2) AS revenue[cite: 1]
-FROM orders o[cite: 1]
-JOIN order_items oi ON o.order_id = oi.order_id[cite: 1]
-WHERE o.order_status = 'delivered'[cite: 1]
-GROUP BY month;[cite: 1]
+SELECT DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m') AS month,
+       ROUND(SUM(oi.price), 2) AS revenue
+FROM orders o
+JOIN order_items oi ON o.order_id = oi.order_id
+WHERE o.order_status = 'delivered'
+GROUP BY month;
 
 
 -- Query 1: Revenue trend by month
@@ -125,7 +125,7 @@ ORDER BY month;
 SELECT month,
        revenue,
        ROUND((revenue - LAG(revenue) OVER (ORDER BY month)) 
-             / LAG(revenue) OVER (ORDER BY month) * 100, 1) AS mom_growth_pct[cite: 1]
+             / LAG(revenue) OVER (ORDER BY month) * 100, 1) AS MoM_growth_pct
 FROM temp_monthly_revenue
 ORDER BY month;
 
