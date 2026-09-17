@@ -84,35 +84,55 @@ CREATE TABLE geolocation (
     geolocation_state VARCHAR(5)
 );
 
+ALTER TABLE order_items
+    ADD CONSTRAINT fk_order_items_orders FOREIGN KEY (order_id) REFERENCES orders(order_id),
+    ADD CONSTRAINT fk_order_items_products FOREIGN KEY (product_id) REFERENCES products(product_id),
+    ADD CONSTRAINT fk_order_items_sellers FOREIGN KEY (seller_id) REFERENCES sellers(seller_id);
+
+ALTER TABLE order_payments
+    ADD CONSTRAINT fk_order_payments_orders FOREIGN KEY (order_id) REFERENCES orders(order_id);
+
+
+SET SESSION sql_mode = '';
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION';
+ALTER TABLE order_reviews
+    ADD CONSTRAINT fk_order_reviews_orders FOREIGN KEY (order_id) REFERENCES orders(order_id);
+
+
 # - - - - - - - - - - - - - - - Queries - - - - - - - - - - - - - - - - 
-# revenue trend by month 
+-- 1. Create and populate the Temporary Table once
 USE olist_ecommerce;
-SELECT DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m') AS month,
-       ROUND(SUM(oi.price), 2) AS revenue
-FROM orders o
-JOIN order_items oi ON o.order_id = oi.order_id
-WHERE o.order_status = 'delivered'
-GROUP BY month
+
+DROP TEMPORARY TABLE IF EXISTS temp_monthly_revenue;
+
+CREATE TEMPORARY TABLE temp_monthly_revenue AS
+SELECT DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m') AS month,[cite: 1]
+       ROUND(SUM(oi.price), 2) AS revenue[cite: 1]
+FROM orders o[cite: 1]
+JOIN order_items oi ON o.order_id = oi.order_id[cite: 1]
+WHERE o.order_status = 'delivered'[cite: 1]
+GROUP BY month;[cite: 1]
+
+
+-- Query 1: Revenue trend by month
+SELECT month,
+       revenue
+FROM temp_monthly_revenue
 ORDER BY month;
 
 
-# month over month growth rate
-WITH monthly AS (
-    SELECT DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m') AS month,
-           SUM(oi.price) AS revenue
-    FROM orders o 
-    JOIN order_items oi ON o.order_id = oi.order_id
-    WHERE o.order_status = 'delivered'
-    GROUP BY month
-)
-SELECT month, revenue,
-       ROUND((revenue - LAG(revenue) OVER (ORDER BY month))
-             / LAG(revenue) OVER (ORDER BY month) * 100, 1) AS mom_growth_pct
-FROM monthly 
+-- Query 2. Month-over-Month (MoM) growth rate
+SELECT month,
+       revenue,
+       ROUND((revenue - LAG(revenue) OVER (ORDER BY month)) 
+             / LAG(revenue) OVER (ORDER BY month) * 100, 1) AS mom_growth_pct[cite: 1]
+FROM temp_monthly_revenue
 ORDER BY month;
 
 
-#top 10 product category by revenue 
+
+
+-- Query 3. top 10 product category by revenue 
 SELECT t.product_category_name_english, ROUND(SUM(oi.price), 2) AS revenue
 FROM order_items oi
 JOIN products p ON oi.product_id = p.product_id
@@ -193,53 +213,33 @@ LIMIT 5;
 
 
 # Customer Cohort Retention Analysis - Tracks monthly retention cohorts to see how many unique customers return in subsequent months.
-WITH customer_cohort AS (
-    SELECT c.customer_unique_id,
-           DATE_FORMAT(MIN(o.order_purchase_timestamp), '%Y-%m-01') AS cohort_month
-    FROM orders o
-    JOIN customers c ON o.customer_id = c.customer_id
-    WHERE o.order_status = 'delivered'
-    GROUP BY c.customer_unique_id
-),
-customer_activities AS (
-    SELECT c.customer_unique_id,
-           TIMESTAMPDIFF(MONTH, STR_TO_DATE(cc.cohort_month, '%Y-%m-%d'), 
-                         STR_TO_DATE(DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m-01'), '%Y-%m-%d')) AS month_number
-    FROM orders o
-    JOIN customers c ON o.customer_id = c.customer_id
-    JOIN customer_cohort cc ON c.customer_unique_id = cc.customer_unique_id
-    WHERE o.order_status = 'delivered'
-)
-SELECT cc.cohort_month,
-       COUNT(DISTINCT cc.customer_unique_id) AS total_customers,
-       COUNT(DISTINCT CASE WHEN ca.month_number = 1 THEN ca.customer_unique_id END) AS month_1,
-       COUNT(DISTINCT CASE WHEN ca.month_number = 2 THEN ca.customer_unique_id END) AS month_2,
-       COUNT(DISTINCT CASE WHEN ca.month_number = 3 THEN ca.customer_unique_id END) AS month_3
-FROM customer_cohort cc
-LEFT JOIN customer_activities ca ON cc.customer_unique_id = ca.customer_unique_id
-GROUP BY cc.cohort_month
-ORDER BY cc.cohort_month;
+-- WITH customer_cohort AS (
+--     SELECT c.customer_unique_id,
+--            DATE_FORMAT(MIN(o.order_purchase_timestamp), '%Y-%m-01') AS cohort_month
+--     FROM orders o
+--     JOIN customers c ON o.customer_id = c.customer_id
+--     WHERE o.order_status = 'delivered'
+--     GROUP BY c.customer_unique_id
+-- ),
+-- customer_activities AS (
+--     SELECT c.customer_unique_id,
+--            TIMESTAMPDIFF(MONTH, STR_TO_DATE(cc.cohort_month, '%Y-%m-%d'), 
+--                          STR_TO_DATE(DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m-01'), '%Y-%m-%d')) AS month_number
+--     FROM orders o
+--     JOIN customers c ON o.customer_id = c.customer_id
+--     JOIN customer_cohort cc ON c.customer_unique_id = cc.customer_unique_id
+--     WHERE o.order_status = 'delivered'
+-- )
+-- SELECT cc.cohort_month,
+--        COUNT(DISTINCT cc.customer_unique_id) AS total_customers,
+--        COUNT(DISTINCT CASE WHEN ca.month_number = 1 THEN ca.customer_unique_id END) AS month_1,
+--        COUNT(DISTINCT CASE WHEN ca.month_number = 2 THEN ca.customer_unique_id END) AS month_2,
+--        COUNT(DISTINCT CASE WHEN ca.month_number = 3 THEN ca.customer_unique_id END) AS month_3
+-- FROM customer_cohort cc
+-- LEFT JOIN customer_activities ca ON cc.customer_unique_id = ca.customer_unique_id
+-- GROUP BY cc.cohort_month
+-- ORDER BY cc.cohort_month;
 
-#Full RFM Segmentation (Recency, Frequency, Monetary) - Scores customers across 3 key metrics using NTILE(5) to identify high-value vs. churn-risk buyers.
-WITH max_date AS (
-    SELECT MAX(order_purchase_timestamp) AS ref_date FROM orders
-),
-rfm_base AS (
-    SELECT c.customer_unique_id,
-           DATEDIFF((SELECT ref_date FROM max_date), MAX(o.order_purchase_timestamp)) AS recency,
-           COUNT(DISTINCT o.order_id) AS frequency,
-           ROUND(SUM(oi.price), 2) AS monetary
-    FROM orders o
-    JOIN customers c ON o.customer_id = c.customer_id
-    JOIN order_items oi ON o.order_id = oi.order_id
-    WHERE o.order_status = 'delivered'
-    GROUP BY c.customer_unique_id
-)
-SELECT customer_unique_id, recency, frequency, monetary,
-       NTILE(5) OVER (ORDER BY recency DESC) AS r_score,
-       NTILE(5) OVER (ORDER BY frequency ASC) AS f_score,
-       NTILE(5) OVER (ORDER BY monetary ASC) AS m_score
-FROM rfm_base;
 
 
 #Logistics & Freight Efficiency by Route - Calculates the average freight burden and transit time between customer and seller states to uncover logistics bottlenecks.
