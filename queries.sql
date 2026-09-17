@@ -130,8 +130,6 @@ FROM temp_monthly_revenue
 ORDER BY month;
 
 
-
-
 -- Query 3. top 10 product category by revenue 
 SELECT t.product_category_name_english, ROUND(SUM(oi.price), 2) AS revenue
 FROM order_items oi
@@ -141,8 +139,10 @@ GROUP BY t.product_category_name_english
 ORDER BY revenue DESC
 LIMIT 10;
 
+-- similarly can find the products with least revenue, to analyse and find areas of improvement
 
-# Rank sellers by revenue within their state (window function):
+
+# query 4.  Rank sellers by revenue within their state (window function):
 SELECT s.seller_state, s.seller_id, ROUND(SUM(oi.price), 2) AS revenue,
        RANK() OVER (PARTITION BY s.seller_state ORDER BY SUM(oi.price) DESC) AS state_rank
 FROM order_items oi
@@ -150,7 +150,7 @@ JOIN sellers s ON oi.seller_id = s.seller_id
 GROUP BY s.seller_state, s.seller_id;
 
 
-# Delivery delay vs. review score (does late delivery hurt ratings?):
+# query 5. Delivery delay vs. review score (does late delivery hurt ratings?):
 SELECT
   CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date
        THEN 'Late' ELSE 'On-time' END AS delivery_status,
@@ -163,14 +163,14 @@ GROUP BY delivery_status;
 
 
 
-# Average delivery delay in days:
+# query 6. Average delivery delay in days:
 SELECT ROUND(AVG(DATEDIFF(order_delivered_customer_date, order_estimated_delivery_date)), 1)
        AS avg_days_early_or_late
 FROM orders
 WHERE order_delivered_customer_date IS NOT NULL;
 
 
-# Payment type distribution:
+# query 7. Payment type distribution:
 SELECT payment_type, COUNT(*) AS num_payments,
        ROUND(AVG(payment_installments), 1) AS avg_installments
 FROM order_payments
@@ -178,7 +178,7 @@ GROUP BY payment_type
 ORDER BY num_payments DESC;
 
 
-# Repeat customers (self-service RFM-lite):
+# query 8. Repeat customers (self-service RFM-lite):
 SELECT customer_unique_id, COUNT(DISTINCT o.order_id) AS num_orders
 FROM orders o
 JOIN customers c ON o.customer_id = c.customer_id
@@ -186,20 +186,30 @@ GROUP BY customer_unique_id
 HAVING num_orders > 1
 ORDER BY num_orders DESC;
 
+# query 9. to find late_delivery_percentage per region 
+SELECT 
+    c.customer_state AS region,
+    COUNT(o.order_id) AS total_delivered_orders,
+    SUM(CASE 
+            WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 
+            ELSE 0 
+        END) AS late_deliveries,
+    ROUND(
+        SUM(CASE 
+                WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 
+                ELSE 0 
+            END) * 100.0 / COUNT(o.order_id), 
+        2
+    ) AS late_delivery_rate_pct
+FROM orders o
+JOIN customers c ON o.customer_id = c.customer_id
+WHERE o.order_status = 'delivered'
+  AND o.order_delivered_customer_date IS NOT NULL
+GROUP BY c.customer_state
+ORDER BY late_delivery_rate_pct DESC;
 
 
-#Running total of revenue (window function, CTE):
-WITH daily AS (
-    SELECT DATE(o.order_purchase_timestamp) AS order_date, SUM(oi.price) AS revenue
-    FROM orders o JOIN order_items oi ON o.order_id = oi.order_id
-    GROUP BY order_date
-)
-SELECT order_date, revenue,
-       SUM(revenue) OVER (ORDER BY order_date) AS running_total
-FROM daily ORDER BY order_date;
-
-
-#Top 5 states by average order value:
+# query 10. Top 5 states by average order value:
 SELECT c.customer_state, ROUND(AVG(order_total), 2) AS avg_order_value
 FROM (
     SELECT o.order_id, o.customer_id, SUM(oi.price) AS order_total
@@ -212,37 +222,42 @@ ORDER BY avg_order_value DESC
 LIMIT 5;
 
 
-# Customer Cohort Retention Analysis - Tracks monthly retention cohorts to see how many unique customers return in subsequent months.
--- WITH customer_cohort AS (
---     SELECT c.customer_unique_id,
---            DATE_FORMAT(MIN(o.order_purchase_timestamp), '%Y-%m-01') AS cohort_month
---     FROM orders o
---     JOIN customers c ON o.customer_id = c.customer_id
---     WHERE o.order_status = 'delivered'
---     GROUP BY c.customer_unique_id
--- ),
--- customer_activities AS (
---     SELECT c.customer_unique_id,
---            TIMESTAMPDIFF(MONTH, STR_TO_DATE(cc.cohort_month, '%Y-%m-%d'), 
---                          STR_TO_DATE(DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m-01'), '%Y-%m-%d')) AS month_number
---     FROM orders o
---     JOIN customers c ON o.customer_id = c.customer_id
---     JOIN customer_cohort cc ON c.customer_unique_id = cc.customer_unique_id
---     WHERE o.order_status = 'delivered'
--- )
--- SELECT cc.cohort_month,
---        COUNT(DISTINCT cc.customer_unique_id) AS total_customers,
---        COUNT(DISTINCT CASE WHEN ca.month_number = 1 THEN ca.customer_unique_id END) AS month_1,
---        COUNT(DISTINCT CASE WHEN ca.month_number = 2 THEN ca.customer_unique_id END) AS month_2,
---        COUNT(DISTINCT CASE WHEN ca.month_number = 3 THEN ca.customer_unique_id END) AS month_3
--- FROM customer_cohort cc
--- LEFT JOIN customer_activities ca ON cc.customer_unique_id = ca.customer_unique_id
--- GROUP BY cc.cohort_month
--- ORDER BY cc.cohort_month;
+#query 11 Customer Cohort Retention Analysis
+WITH customer_orders AS (
+    SELECT 
+        c.customer_unique_id,
+        o.order_purchase_timestamp,
+        DATE_FORMAT(
+            MIN(o.order_purchase_timestamp) OVER(PARTITION BY c.customer_unique_id), 
+            '%Y-%m-01'
+        ) AS cohort_month
+    FROM orders o
+    JOIN customers c ON o.customer_id = c.customer_id
+    WHERE o.order_status = 'delivered'
+),
+cohort_intervals AS (
+    SELECT 
+        customer_unique_id,
+        cohort_month,
+        TIMESTAMPDIFF(
+            MONTH, 
+            STR_TO_DATE(cohort_month, '%Y-%m-%d'), 
+            DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m-01')
+        ) AS month_number
+    FROM customer_orders o
+)
+SELECT 
+    cohort_month,
+    COUNT(DISTINCT customer_unique_id) AS total_customers,
+    COUNT(DISTINCT CASE WHEN month_number = 1 THEN customer_unique_id END) AS month_1,
+    COUNT(DISTINCT CASE WHEN month_number = 2 THEN customer_unique_id END) AS month_2,
+    COUNT(DISTINCT CASE WHEN month_number = 3 THEN customer_unique_id END) AS month_3
+FROM cohort_intervals
+GROUP BY cohort_month
+ORDER BY cohort_month;
 
 
-
-#Logistics & Freight Efficiency by Route - Calculates the average freight burden and transit time between customer and seller states to uncover logistics bottlenecks.
+# query 12. Logistics & Freight Efficiency by Route - Calculates the average freight burden and transit time between customer and seller states to uncover logistics bottlenecks.
 SELECT s.seller_state,
        c.customer_state,
        COUNT(DISTINCT o.order_id) AS total_orders,
@@ -259,7 +274,7 @@ GROUP BY s.seller_state, c.customer_state
 HAVING total_orders >= 50
 ORDER BY avg_transit_days DESC;
 
-#Market Basket Analysis (Top Co-Purchased Categories) - Finds pairs of product categories most frequently purchased together in the same order.
+# query 13. Market Basket Analysis (Top Co-Purchased Categories) - Finds pairs of product categories most frequently purchased together in the same order.
 SELECT t1.product_category_name_english AS category_a,
        t2.product_category_name_english AS category_b,
        COUNT(*) AS times_bought_together
@@ -276,7 +291,7 @@ GROUP BY category_a, category_b
 ORDER BY times_bought_together DESC
 LIMIT 10;
 
-#Order Cancellation & Fulfillment Failure Rate - Identifies product categories with the highest cancellation and unavailability rates.
+# query 14. Order Cancellation & Fulfillment Failure Rate - Identifies product categories with the highest cancellation and unavailability rates.
 SELECT COALESCE(t.product_category_name_english, 'Unknown') AS category,
        COUNT(o.order_id) AS total_orders,
        SUM(CASE WHEN o.order_status = 'canceled' THEN 1 ELSE 0 END) AS canceled_orders,
@@ -292,6 +307,17 @@ HAVING total_orders >= 100
 ORDER BY cancellation_rate_pct DESC
 LIMIT 10;
 
+
+# some more queries:
+-- # query. Running total of revenue (window function, CTE):
+WITH daily AS (
+    SELECT DATE(o.order_purchase_timestamp) AS order_date, SUM(oi.price) AS revenue
+    FROM orders o JOIN order_items oi ON o.order_id = oi.order_id
+    GROUP BY order_date
+)
+SELECT order_date, revenue,
+       SUM(revenue) OVER (ORDER BY order_date) AS running_total
+FROM daily ORDER BY order_date;
 
 
 
