@@ -1,6 +1,8 @@
 CREATE DATABASE olist_ecommerce;
 USE olist_ecommerce;
 
+
+# -- - - - - - - tables - -  - - -- - - - - - - - 
 CREATE TABLE customers (
     customer_id VARCHAR(50) PRIMARY KEY,
     customer_unique_id VARCHAR(50),
@@ -82,7 +84,7 @@ CREATE TABLE geolocation (
     geolocation_state VARCHAR(5)
 );
 
-
+# - - - - - - - - - - - - - - - Queries - - - - - - - - - - - - - - - - 
 # revenue trend by month 
 USE olist_ecommerce;
 SELECT DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m') AS month,
@@ -188,3 +190,108 @@ JOIN customers c ON sub.customer_id = c.customer_id
 GROUP BY c.customer_state
 ORDER BY avg_order_value DESC
 LIMIT 5;
+
+
+# Customer Cohort Retention Analysis - Tracks monthly retention cohorts to see how many unique customers return in subsequent months.
+WITH customer_cohort AS (
+    SELECT c.customer_unique_id,
+           DATE_FORMAT(MIN(o.order_purchase_timestamp), '%Y-%m-01') AS cohort_month
+    FROM orders o
+    JOIN customers c ON o.customer_id = c.customer_id
+    WHERE o.order_status = 'delivered'
+    GROUP BY c.customer_unique_id
+),
+customer_activities AS (
+    SELECT c.customer_unique_id,
+           TIMESTAMPDIFF(MONTH, STR_TO_DATE(cc.cohort_month, '%Y-%m-%d'), 
+                         STR_TO_DATE(DATE_FORMAT(o.order_purchase_timestamp, '%Y-%m-01'), '%Y-%m-%d')) AS month_number
+    FROM orders o
+    JOIN customers c ON o.customer_id = c.customer_id
+    JOIN customer_cohort cc ON c.customer_unique_id = cc.customer_unique_id
+    WHERE o.order_status = 'delivered'
+)
+SELECT cc.cohort_month,
+       COUNT(DISTINCT cc.customer_unique_id) AS total_customers,
+       COUNT(DISTINCT CASE WHEN ca.month_number = 1 THEN ca.customer_unique_id END) AS month_1,
+       COUNT(DISTINCT CASE WHEN ca.month_number = 2 THEN ca.customer_unique_id END) AS month_2,
+       COUNT(DISTINCT CASE WHEN ca.month_number = 3 THEN ca.customer_unique_id END) AS month_3
+FROM customer_cohort cc
+LEFT JOIN customer_activities ca ON cc.customer_unique_id = ca.customer_unique_id
+GROUP BY cc.cohort_month
+ORDER BY cc.cohort_month;
+
+#Full RFM Segmentation (Recency, Frequency, Monetary) - Scores customers across 3 key metrics using NTILE(5) to identify high-value vs. churn-risk buyers.
+WITH max_date AS (
+    SELECT MAX(order_purchase_timestamp) AS ref_date FROM orders
+),
+rfm_base AS (
+    SELECT c.customer_unique_id,
+           DATEDIFF((SELECT ref_date FROM max_date), MAX(o.order_purchase_timestamp)) AS recency,
+           COUNT(DISTINCT o.order_id) AS frequency,
+           ROUND(SUM(oi.price), 2) AS monetary
+    FROM orders o
+    JOIN customers c ON o.customer_id = c.customer_id
+    JOIN order_items oi ON o.order_id = oi.order_id
+    WHERE o.order_status = 'delivered'
+    GROUP BY c.customer_unique_id
+)
+SELECT customer_unique_id, recency, frequency, monetary,
+       NTILE(5) OVER (ORDER BY recency DESC) AS r_score,
+       NTILE(5) OVER (ORDER BY frequency ASC) AS f_score,
+       NTILE(5) OVER (ORDER BY monetary ASC) AS m_score
+FROM rfm_base;
+
+
+#Logistics & Freight Efficiency by Route - Calculates the average freight burden and transit time between customer and seller states to uncover logistics bottlenecks.
+SELECT s.seller_state,
+       c.customer_state,
+       COUNT(DISTINCT o.order_id) AS total_orders,
+       ROUND(AVG(oi.freight_value), 2) AS avg_freight,
+       ROUND(AVG(oi.freight_value / (oi.price + oi.freight_value)) * 100, 2) AS freight_cost_share_pct,
+       ROUND(AVG(DATEDIFF(o.order_delivered_customer_date, o.order_delivered_carrier_date)), 1) AS avg_transit_days
+FROM orders o
+JOIN order_items oi ON o.order_id = oi.order_id
+JOIN customers c ON o.customer_id = c.customer_id
+JOIN sellers s ON oi.seller_id = s.seller_id
+WHERE o.order_status = 'delivered'
+  AND o.order_delivered_customer_date IS NOT NULL
+GROUP BY s.seller_state, c.customer_state
+HAVING total_orders >= 50
+ORDER BY avg_transit_days DESC;
+
+#Market Basket Analysis (Top Co-Purchased Categories) - Finds pairs of product categories most frequently purchased together in the same order.
+SELECT t1.product_category_name_english AS category_a,
+       t2.product_category_name_english AS category_b,
+       COUNT(*) AS times_bought_together
+FROM order_items oi1
+JOIN order_items oi2 
+  ON oi1.order_id = oi2.order_id 
+  AND oi1.product_id < oi2.product_id
+JOIN products p1 ON oi1.product_id = p1.product_id
+JOIN products p2 ON oi2.product_id = p2.product_id
+JOIN product_category_translation t1 ON p1.product_category_name = t1.product_category_name
+JOIN product_category_translation t2 ON p2.product_category_name = t2.product_category_name
+WHERE t1.product_category_name_english != t2.product_category_name_english
+GROUP BY category_a, category_b
+ORDER BY times_bought_together DESC
+LIMIT 10;
+
+#Order Cancellation & Fulfillment Failure Rate - Identifies product categories with the highest cancellation and unavailability rates.
+SELECT COALESCE(t.product_category_name_english, 'Unknown') AS category,
+       COUNT(o.order_id) AS total_orders,
+       SUM(CASE WHEN o.order_status = 'canceled' THEN 1 ELSE 0 END) AS canceled_orders,
+       SUM(CASE WHEN o.order_status = 'unavailable' THEN 1 ELSE 0 END) AS unavailable_orders,
+       ROUND(SUM(CASE WHEN o.order_status IN ('canceled', 'unavailable') THEN 1 ELSE 0 END) 
+             * 100.0 / COUNT(o.order_id), 2) AS cancellation_rate_pct
+FROM orders o
+JOIN order_items oi ON o.order_id = oi.order_id
+JOIN products p ON oi.product_id = p.product_id
+LEFT JOIN product_category_translation t ON p.product_category_name = t.product_category_name
+GROUP BY category
+HAVING total_orders >= 100
+ORDER BY cancellation_rate_pct DESC
+LIMIT 10;
+
+
+
+
