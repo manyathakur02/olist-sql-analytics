@@ -5,7 +5,7 @@ An executive dashboard built in Tableau connecting directly to the analytical ou
 ![Olist Executive Dashboard](assets/dashboard_preview.png)
 
 > 🔗 **Interactive Live Link:** [View on Tableau Public](https://public.tableau.com/) *(replace with your link if published)*  
-> 📁 **Tableau Workbook:** [`tableau/olist_analytics_dashboard.twbx`](./tableau/olist_analytics_dashboard.twbx)
+> 📁 **Tableau Workbook:** 
 
 ---
 
