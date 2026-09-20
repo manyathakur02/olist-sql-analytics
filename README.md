@@ -23,27 +23,40 @@ An end-to-end data analytics and business intelligence project analyzing 100k+ r
 * **products & product_category_name_translation:** Product dimensions, category names in Portuguese, and English translation mappings.
 
 ---
+## Tableau Executive Dashboard Architecture
+* The dashboard visualizes business operations across 5 integrated worksheets linked by interactive cross-filtering:
 
-## Core SQL Analytical Queries
+* Monthly Revenue & MoM Growth: Dual-axis chart with revenue bars and a MoM percentage growth line highlighting seasonal surges (Black Friday November 2017 peak).
 
-### 1. Monthly Revenue & MoM Growth Dynamics
-Utilizes CTEs and the `LAG()` window function to track monthly sales trajectory alongside month-over-month percentage changes:
+* Top 10 Product Categories: Ranked horizontal bar chart highlighting top grossing categories (health_beauty, watches_gifts, bed_bath_table) sorted descending with direct revenue labels.
 
-```sql
-WITH MonthlySales AS (
-    SELECT 
-        DATE_FORMAT(order_purchase_timestamp, '%Y-%m') AS sale_month,
-        ROUND(SUM(price), 2) AS monthly_revenue
-    FROM orders o
-    JOIN order_items oi ON o.order_id = oi.order_id
-    WHERE o.order_status = 'delivered'
-    GROUP BY DATE_FORMAT(order_purchase_timestamp, '%Y-%m')
-)
-SELECT 
-    sale_month,
-    monthly_revenue,
-    LAG(monthly_revenue) OVER (ORDER BY sale_month) AS prev_month_revenue,
-    ROUND(((monthly_revenue - LAG(monthly_revenue) OVER (ORDER BY sale_month)) 
-           / LAG(monthly_revenue) OVER (ORDER BY sale_month)) * 100, 2) AS mom_growth_pct
-FROM MonthlySales
-ORDER BY sale_month;
+* Delivery Delay vs. Review Rating: Diverging comparison showing satisfaction drops caused by shipping bottlenecks.
+
+* Brazil Regional Late Delivery Heatmap: Filled geographic map plotting all 27 Brazilian states, shaded using a red-green diverging color palette based on state-level delay percentages.
+
+* Payment Methods & Installments: Distribution bar chart sorting transaction methods (credit_card, boleto, voucher, debit_card) with color gradients indicating average installment counts.
+
+## Data Modeling Adjustments Applied in Tableau
+* Relationship Calculation: Handled escaped quote anomalies in review exports by using relationship string calculations: REPLACE(["Order Id"], '"', '') to successfully relate orders and reviews without dropping records.
+
+* Geographic Role Configuration: Assigned geographic role of State/Province to Customer State, mapping fixed country assignment to Brazil to resolve unmatched region codes.
+
+* Date Parsing Logic: Applied explicit timestamp checks:
+IF ISNULL([Order Delivered Customer Date]) THEN "No Delivery Date" ELSEIF [Order Delivered Customer Date] > [Order Estimated Delivery Date] THEN "Late" ELSE "On-time" END to separate valid deliveries from in-transit or missing records.
+
+## Analytical Findings & Business Takeaways
+* Logistics Latency Is the Primary Driver of Negative Ratings:
+
+On-time orders maintain an average rating of 4.29 / 5.0.
+
+Delayed shipments drop to 2.57 / 5.0 (a drop of over 1.7 stars), indicating that logistical delays represent the single largest point of customer dissatisfaction.
+
+* Severe Regional Supply Chain Disparities:
+
+Core southeastern states (SP, PR, SC) demonstrate low late delivery rates between 2.8% and 5.0%.
+
+Distant northern and northeastern states (MA, AL, AP, CE) face delay rates between 20.0% and 23.0%, underscoring the necessity of forward distribution centers in the north.
+
+* Installment-Driven Purchasing Power:
+
+Credit cards drive over 73% of transaction volume and carry an average of 3.5 installments, highlighting that financing options are essential for customer conversion in top categories.
